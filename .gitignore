@@ -1,0 +1,23 @@
+# --- Kişisel / repoya gitmeyecek ---
+# Projenin canlı çalışma notu: kişisel kararlar, oturum geçmişi, yerel yollar içerir
+context.md
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+.ipynb_checkpoints/
+
+# --- Ortam / IDE ---
+.env
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# --- Geçici çıktılar ---
+*.log
+tmp/
