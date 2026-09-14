@@ -8,7 +8,7 @@ BIST'te yeni halka arz olan bir şirketin, borsada işlem görmeye başladıktan
 > from raw price series, trains a calibrated probability model, and outputs decision
 > support for upcoming offerings. Turkish language project.*
 
-> ⚠️ **Bu bir yatırım tavsiyesi değildir.** Küçük bir veri setiyle (N=66) eğitilmiş
+> ⚠️ **Bu bir yatırım tavsiyesi değildir.** Sınırlı bir veri setiyle (N=136) eğitilmiş
 > deneysel bir projedir.
 
 ---
@@ -32,18 +32,18 @@ olasılık üretir:
   Halka arz büyüklüğü: 2.23 milyar TL  (modelin en güçlü sinyali)
 
   TAHMİN — bu şirketin tavan gitme olasılığı
-    ≥1 gün : % 61  ████████████
-    ≥3 gün : % 46  █████████
-    ≥5 gün : % 24  ████
-    ≥7 gün : % 12  ██
+    ≥1 gün : % 81  ████████████████
+    ≥3 gün : % 60  ███████████
+    ≥5 gün : % 40  ████████
+    ≥7 gün : % 23  ████
 
   MODEL KALİTESİ — modelin o eşikte şirketleri ayırt etme gücü
-  (bu şirkete özgü değil, 66 şirketlik geçmişe dayalı genel performans)
+  (bu şirkete özgü değil, 136 şirketlik geçmişe dayalı genel performans)
     Eşik     AUC      %90 aralık  Poz.  Ayrım gücü
-    ≥1 gün  0.66     0.54 - 0.77    42  sınırlı ayrım gücü
-    ≥3 gün  0.75     0.65 - 0.85    35  orta düzey ayrım gücü
-    ≥5 gün  0.62     0.49 - 0.74    20  ayırt edemiyor (aralık 0.50'yi içeriyor)
-    ≥7 gün  0.70     0.57 - 0.82    13  sınırlı ayrım gücü
+    ≥1 gün  0.77     0.69 - 0.85   114  orta düzey ayrım gücü
+    ≥3 gün  0.76     0.69 - 0.83    96  orta düzey ayrım gücü
+    ≥5 gün  0.63     0.55 - 0.71    66  sınırlı ayrım gücü
+    ≥7 gün  0.64     0.55 - 0.72    43  sınırlı ayrım gücü
 ```
 
 Çıktı bilinçli olarak **iki bloğa ayrılmış**: üstteki blok bu şirket için üretilen
@@ -57,7 +57,7 @@ yüksek olasılık, modelin o eşikte iyi olduğu anlamına gelmiyor.
 ```bash
 git clone <repo-url>
 cd halka-arz-tahmin
-pip install pandas scikit-learn joblib requests
+pip install pandas scikit-learn joblib requests beautifulsoup4
 
 python run.py          # bekleyen halka arzları bul + tahmin üret (~10 sn)
 python run.py tam      # her şeyi sıfırdan üret: veri + hedef + model (birkaç dakika)
@@ -89,30 +89,43 @@ halkarz.com (web scraping) ──> X: arz büyüklüğü, sermaye yapısı ─�
 BIST'te günlük fiyat limiti ±%10. Bir gün "tavan" sayılır eğer kapanış bir önceki
 kapanışa göre ≥%9.5 arttıysa. İlk işlem gününden itibaren kesintisiz kaç gün tavan
 olduğu sayılır (takip penceresi: ilk 30 işlem günü). Hesaplama, bağımsız bir kaynakla
-karşılaştırılarak doğrulandı (51 şirketin 45'i ±1 gün içinde eşleşti).
+karşılaştırılarak doğrulandı (51 şirketin 41'i tam, 46'sı ±1 gün içinde eşleşti).
 
 ### Model
 - **Algoritma:** Logistic Regression (`SimpleImputer` → `StandardScaler` → `LogReg`)
 - **Feature'lar:** `log(halka arz büyüklüğü)`, `sermaye artışı %`, `ortak satışı %`
   — hepsi halka arz **öncesi** bilinen değerler (veri sızıntısı yok)
-- **Eğitim verisi:** 66 şirket (2024-2026)
+- **Eğitim verisi:** 136 şirket (2023-2026, hedefi güvenilir hesaplanabilenler)
 - **Değerlendirme:** Stratified 5-fold CV, ROC AUC + bootstrap güven aralığı
 
 | Eşik | Pozitif örnek | ROC AUC | %90 güven aralığı | Ayrım gücü |
 |---|---|---|---|---|
-| ≥1 gün | 42 | 0.657 | 0.54 – 0.77 | sınırlı |
-| **≥3 gün** | 35 | **0.752** | **0.65 – 0.85** | **orta düzey** |
-| ≥5 gün | 20 | 0.616 | 0.49 – 0.74 | ayırt edemiyor (aralık 0.50'yi içeriyor) |
-| ≥7 gün | 13 | 0.705 | 0.57 – 0.82 | sınırlı |
+| **≥1 gün** | 114 | **0.774** | 0.69 – 0.85 | orta düzey |
+| **≥3 gün** | 96 | **0.762** | 0.69 – 0.83 | orta düzey |
+| ≥5 gün | 66 | 0.632 | 0.55 – 0.71 | sınırlı |
+| ≥7 gün | 43 | 0.637 | 0.55 – 0.72 | sınırlı |
 
 Değerlendirme, AUC'nin kendisine değil **güven aralığının alt sınırına** göre yapılıyor:
 az örnekte tek bir AUC sayısı yanıltıcı olabiliyor. Kademeler bilinçli olarak yumuşak
-tutuldu, çünkü aralıklar birbiriyle çakışıyor — örneğin ≥1 gün (0.54–0.77) ile ≥3 gün
-(0.65–0.85) arasındaki fark istatistiksel olarak anlamlı olmayabilir. Pratik sonuç:
-**≥3 gün en güvenilir eşik, ≥5 gün'e hiç güvenilmemeli.**
+tutuldu, çünkü aralıklar birbiriyle çakışıyor. Pratik sonuç: **≥1 ve ≥3 gün eşikleri
+kullanılabilir; ≥5 ve ≥7 gün tahminleri zayıf, temkinli okunmalı.**
 
-**En güçlü sinyal:** halka arz büyüklüğü (negatif korelasyon). Küçük arz = piyasada az
-hisse = fiyatı yukarı itmek kolay.
+**En güçlü sinyal:** halka arz büyüklüğü. Standardize katsayısı −0.97 ile diğer iki
+feature'ı (±0.10) ezici şekilde geride bırakıyor. Küçük arz = piyasada az hisse =
+fiyatı yukarı itmek kolay.
+
+**Neden Logistic Regression?** Gradient Boosting ve Random Forest ile aynı veri ve
+feature setinde karşılaştırıldı:
+
+| Model | Test AUC (CV) | Eğitim AUC | Ezber farkı | Brier |
+|---|---|---|---|---|
+| **Logistic Regression** | **0.762** | 0.779 | **0.017** | **0.172** |
+| Random Forest | 0.753 | 0.922 | 0.170 | 0.174 |
+| Gradient Boosting | 0.699 | 0.924 | 0.225 | 0.196 |
+
+Logistic Regression üç metrikte de önde. Ayrıca eğitim–test farkı çok küçük (0.017),
+yani öğrendiği örüntü bu veri setine özgü değil; ağaç modelleri eğitim verisini
+neredeyse ezberliyor. Katsayılarının yorumlanabilir olması da ek avantaj.
 
 ---
 

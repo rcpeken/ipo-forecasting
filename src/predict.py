@@ -13,8 +13,8 @@ KULLANIM:
     python src/predict.py TUMU      # sadece bekleyenleri değil, çekilen tüm
                                     # şirketleri göster (geçmişi test etmek için)
 
-UYARI: Bu, N=52 şirketlik küçük bir veri setiyle eğitilmiş DENEYSEL bir model.
-Yatırım tavsiyesi değildir.
+UYARI: Küçük bir veri setiyle eğitilmiş DENEYSEL bir model (eğitim örnek sayısı
+model dosyasında tutulur ve çıktıda gösterilir). Yatırım tavsiyesi değildir.
 """
 import sys
 
@@ -38,7 +38,7 @@ def feature_uret(row):
     }
 
 
-def tahmin_yazdir(row, models, features):
+def tahmin_yazdir(row, models, features, egitim_n="?"):
     print(f"\n{'='*70}")
     print(f"  {row['kod']} — {row['sirket_adi']}")
     print(f"{'='*70}")
@@ -74,7 +74,7 @@ def tahmin_yazdir(row, models, features):
     # Ayrı blokta gösteriliyor çünkü yan yana konduğunda karışıyordu: yüksek olasılık
     # ile yüksek model kalitesi farklı şeyler, biri diğerini ima etmiyor.
     print("\n  MODEL KALİTESİ — modelin o eşikte şirketleri ayırt etme gücü")
-    print("  (bu şirkete özgü değil, 66 şirketlik geçmişe dayalı genel performans)")
+    print(f"  (bu şirkete özgü değil, {egitim_n} şirketlik geçmişe dayalı genel performans)")
     print(f"    {'Eşik':<6} {'AUC':>5} {'%90 aralık':>15} {'Poz.':>5}  Ayrım gücü")
     print(f"    {'-'*6} {'-'*5} {'-'*15} {'-'*5}  {'-'*36}")
     for esik, bilgi in sorted(models.items()):
@@ -86,7 +86,7 @@ def tahmin_yazdir(row, models, features):
         auc_s = f"{auc:.2f}" if auc is not None else "—"
         print(f"    ≥{esik} gün {auc_s:>5} {aralik:>15} {n_poz:>5}  {yorum}")
     print("\n  Not: Aralıklar birbiriyle çakışıyorsa eşikler arası kalite farkı")
-    print("  anlamlı olmayabilir — bu ölçekte (N=66) belirsizlik yüksek.")
+    print(f"  anlamlı olmayabilir — N={egitim_n} ölçeğinde belirsizlik yüksek.")
 
 
 def main():
@@ -119,12 +119,12 @@ def main():
         return
 
     for _, row in secilen.iterrows():
-        tahmin_yazdir(row, models, features)
+        tahmin_yazdir(row, models, features, saved.get("egitim_n", "?"))
 
     n = saved.get("egitim_n", "?")
     print(f"\n{'='*70}")
-    print(f"  NOT: Bu bir yatırım tavsiyesi değildir. Model {n} şirketlik küçük bir")
-    print("  veri setiyle eğitildi (2024-2026, hedefi güvenilir olanlar).")
+    print(f"  NOT: Bu bir yatırım tavsiyesi değildir. Model {n} şirketlik bir veri")
+    print("  setiyle eğitildi (2023-2026, hedefi güvenilir hesaplanabilenler).")
     print("  Tahminleri kesinlik değil, kaba bir olasılık tahmini olarak oku;")
     print("  bu ölçekte AUC farkları da gürültü içerir.")
     print(f"{'='*70}\n")

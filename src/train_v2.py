@@ -177,27 +177,44 @@ def main():
         print(f"{ad:<38} {len(alt):>5} {alt[HEDEF].mean():>6.1%} {auc:>7.3f} {brier:>8.3f}")
 
     # ---------- C) Hangi model? ----------
-    bolum("C) Model karşılaştırması (en iyi feature seti, tüm veri)")
-    print(f"{'Model':<30} {'AUC':>7} {'Brier':>8}")
-    print("-" * 50)
-    modeller = {"Logistic Regression": logreg(), "Gradient Boosting": gbc(), "Random Forest": rf()}
-    en_iyi_model_ad, en_iyi_model, en_iyi_model_auc = None, None, -1
-    for ad, m in modeller.items():
-        auc, brier = degerlendir(m, df[en_iyi_set], y)
-        print(f"{ad:<30} {auc:>7.3f} {brier:>8.3f}")
-        if auc == auc and auc > en_iyi_model_auc:
-            en_iyi_model_auc, en_iyi_model_ad, en_iyi_model = auc, ad, m
+    # ÖNEMLİ: Karşılaştırma NİHAİ KURULUMDA yapılmalı (temiz alt küme + nihai feature
+    # seti). Önceden tüm veri ve `yil` dahil feature setiyle karşılaştırılıyordu; o
+    # koşulda ağaç modelleri çok kötü görünüyordu ama nihai kurulumda tablo değişiyor.
+    # Farklı bir konfigürasyonda yapılan karşılaştırmaya dayanarak model seçmek hatalı.
+    NIHAI_FEATURES = ["log_buyukluk", "sermaye_artisi_yuzde", "ortak_satisi_yuzde"]
+    # Eğitim alt kümesi: hedefi güvenilir olan TÜM şirketler (yıl filtresi YOK).
+    # Yıl filtresi başta 2023-2024'ün hedefi bozuk olduğu için konmuştu; kaynak
+    # sorun (düzeltilmiş fiyat) HG_* kolonlarına geçilerek çözülünce filtre sadece
+    # veri kaybettirmeye başladı. Ölçüldü: güvenilir-tümü (N=136) AUC 0.748 /
+    # Brier 0.176, güvenilir+2024 (N=82) AUC 0.719 / Brier 0.206.
+    temiz = df[df["ilk_gun_fiyat_guvenilir"] == 1]
+    y_temiz = temiz[HEDEF]
 
-    print(f"\nKazanan: {en_iyi_model_ad} (AUC {en_iyi_model_auc:.3f})")
+    bolum(f"C) Model karşılaştırması — NİHAİ KURULUMDA (N={len(temiz)}, {NIHAI_FEATURES})")
+    print(f"{'Model':<24} {'Eğitim AUC':>11} {'Test AUC (CV)':>14} {'Ezber farkı':>13} {'Brier':>8}")
+    print("-" * 76)
+    modeller = {"Logistic Regression": logreg(), "Gradient Boosting": gbc(), "Random Forest": rf()}
+    for ad, m in modeller.items():
+        auc, brier = degerlendir(m, temiz[NIHAI_FEATURES], y_temiz)
+        m.fit(temiz[NIHAI_FEATURES], y_temiz)
+        egitim_auc = roc_auc_score(y_temiz, m.predict_proba(temiz[NIHAI_FEATURES])[:, 1])
+        print(f"{ad:<24} {egitim_auc:>11.3f} {auc:>14.3f} {egitim_auc-auc:>13.3f} {brier:>8.3f}")
+
+    print("\nSEÇİM: Logistic Regression. Test AUC farkları bu ölçekte gürültü içinde")
+    print("(güven aralıkları ±0.10 genişliğinde), ama LogReg'in EZBER FARKI çok daha")
+    print("küçük — yani öğrendiği şey bu 66 şirkete özgü değil. Ayrıca katsayıları")
+    print("yorumlanabilir ve olasılık çıktısı bu projenin ihtiyacı olan şey.")
 
     # ---------- Katsayılar (yorumlama) ----------
-    if en_iyi_model_ad == "Logistic Regression":
-        p = logreg().fit(df[en_iyi_set], y)
-        bolum("Katsayılar (standardize edilmiş - büyüklük = etki gücü)")
-        for f, c in sorted(zip(en_iyi_set, p.named_steps["clf"].coef_[0]),
-                           key=lambda t: -abs(t[1])):
-            yon = "↑ tavan ihtimalini ARTIRIR" if c > 0 else "↓ tavan ihtimalini AZALTIR"
-            print(f"  {f:<26} {c:+.3f}   {yon}")
+    # NİHAİ modelin katsayıları gösterilmeli (temiz alt küme + nihai feature seti),
+    # yukarıdaki arama aşamasında denenen geniş setinki değil. Aksi halde ekranda
+    # modelde OLMAYAN feature'ların (ör. `yil`) katsayıları görünüyordu.
+    p = logreg().fit(temiz[NIHAI_FEATURES], y_temiz)
+    bolum("Nihai modelin katsayıları (standardize - büyüklük = etki gücü)")
+    for f, c in sorted(zip(NIHAI_FEATURES, p.named_steps["clf"].coef_[0]),
+                       key=lambda t: -abs(t[1])):
+        yon = "↑ tavan ihtimalini ARTIRIR" if c > 0 else "↓ tavan ihtimalini AZALTIR"
+        print(f"  {f:<26} {c:+.3f}   {yon}")
 
     # ---------- Nihai modeller ----------
     # Yukarıdaki testlerin sonucuna göre bilinçli seçimler:
@@ -206,8 +223,7 @@ def main():
     #    Ayrıca gelecekteki bir halka arz için eğitim aralığı dışına taşar.
     #  * Eğitim verisi TEMİZ ALT KÜME: hedefi güvenilir + 2024 sonrası.
     #  * `log_lot_basina_kisi` çıkarıldı: tek başına AUC 0.58, eklendiğinde katkı yok.
-    NIHAI_FEATURES = ["log_buyukluk", "sermaye_artisi_yuzde", "ortak_satisi_yuzde"]
-    temiz = df[(df["ilk_gun_fiyat_guvenilir"] == 1) & (df["yil"] >= 2024)]
+    # (NIHAI_FEATURES ve `temiz` yukarıda C bölümünde tanımlandı.)
 
     bolum(f"Nihai modeller (temiz alt küme, N={len(temiz)}, feature: {NIHAI_FEATURES})")
     modeller_esik = {}

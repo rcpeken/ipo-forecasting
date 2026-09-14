@@ -178,12 +178,17 @@ def main():
         veri = pd.DataFrame(kayitlar)
         veri["_t"] = pd.to_datetime(veri["HGDG_TARIH"], format="%d-%m-%Y", errors="coerce")
         veri = veri.sort_values("_t")
-        veri = veri.dropna(subset=["HGDG_KAPANIS"]).head(TAKIP_GUNU)
+        # HG_* = DÜZELTİLMEMİŞ (ham) fiyat, HGDG_* = düzeltilmiş.
+        # Bedelsiz sermaye artırımı sonrası HGDG_* geçmişe dönük bölünüyor ve
+        # halka arz fiyatıyla kıyaslanamaz hale geliyor (ör. AKFIS'te ilk gün
+        # getirisi -%85 çıkıyordu). HG_* ise o günkü gerçek fiyat: AKFIS ilk gün
+        # 34.84 TL / halka arz 38.70 TL = -%9.97 (taban) — makul.
+        veri = veri.dropna(subset=["HG_KAPANIS"]).head(TAKIP_GUNU)
         if len(veri) == 0:
             print(f"  {kod:8s} KAPANIŞ VERİSİ YOK")
             continue
 
-        gunler = list(zip(veri["HGDG_KAPANIS"], veri.get("HGDG_MIN"), veri.get("HGDG_MAX")))
+        gunler = list(zip(veri["HG_KAPANIS"], veri.get("HG_MIN"), veri.get("HG_MAX")))
         acilis, en_uzun, toplam, ilk_guv = tavan_serisi_hesapla(gunler, float(fiyat))
         ilk_gun_getiri = (gunler[0][0] - float(fiyat)) / float(fiyat) * 100
         sonuclar.append({

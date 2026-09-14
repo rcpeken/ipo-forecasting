@@ -33,6 +33,8 @@ import sys
 import time
 import urllib.request
 
+from bs4 import BeautifulSoup
+
 BASE = "https://halkarz.com/"
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36"
 from paths import HALKARZ_GUNCEL as OUT_PATH, HALKARZ_GECMIS as GECMIS_OUT_PATH
@@ -47,19 +49,6 @@ def get(url: str) -> str:
         return resp.read().decode("utf-8", errors="ignore")
 
 
-def strip_tags(s: str) -> str:
-    s = re.sub(r"<[^>]+>", " ", s)
-    return re.sub(r"\s+", " ", s).strip()
-
-
-def parse_lot(s: str) -> float:
-    """'62.500.000 Lot' -> 62500000.0"""
-    m = re.search(r"([\d.]+)\s*Lot", s)
-    if not m:
-        return float("nan")
-    return float(m.group(1).replace(".", ""))
-
-
 def parse_listing(html: str):
     """
     Halka arz listesini ayrıştırır.
@@ -71,48 +60,82 @@ def parse_listing(html: str):
     geziyor. Bu yüzden sekme yapısı varsa SADECE İLK sekmeyi alıyoruz.
     (Yıl arşivi sayfalarında sekme yok, orada tüm liste geçerli.)
     """
-    if "tab_item" in html:
-        parcalar = html.split("tab_item")
-        if len(parcalar) > 1:
-            html = parcalar[1]
+    soup = BeautifulSoup(html, "html.parser")
+    kapsam = soup.select_one("div.tab_item") or soup
 
     items = []
-    for art in re.findall(r"<article class=\"index-list\">(.*?)</article>", html, re.S):
-        url_m = re.search(r'href="(https://halkarz\.com/[^"]+/)"', art)
-        kod_m = re.search(r'class="il-bist-kod">\s*([A-Z0-9]+)', art)
-        ad_m = re.search(r'class="il-halka-arz-sirket"><a[^>]*>(.*?)</a>', art, re.S)
-        tarih_m = re.search(r"<time datetime=\"([^\"]+)\"", art)
-        if not (url_m and kod_m):
+    for art in kapsam.select("article.index-list"):
+        kod_el = art.select_one(".il-bist-kod")
+        baglanti = art.select_one(".il-halka-arz-sirket a")
+        if not (kod_el and baglanti and baglanti.get("href")):
             continue
+        zaman = art.select_one("time")
         items.append({
-            "kod": kod_m.group(1).strip(),
-            "sirket_adi": strip_tags(ad_m.group(1)) if ad_m else "",
-            "url": url_m.group(1),
-            "talep_tarihi": tarih_m.group(1) if tarih_m else "",
+            "kod": kod_el.get_text(strip=True),
+            "sirket_adi": baglanti.get_text(strip=True),
+            "url": baglanti["href"],
+            "talep_tarihi": zaman.get("datetime", "") if zaman else "",
             # Rozet: sonuçlar açıklandıysa özel bir ikon konuyor
-            "sonuclar_aciklandi": int("snc-badge" in art),
+            "sonuclar_aciklandi": int(bool(art.select_one(".snc-badge"))),
         })
     return items
 
 
+def _sayi(metin: str) -> float:
+    """'62.500.000' -> 62500000.0   ('.' binlik ayırıcı)"""
+    m = re.search(r"[\d.]+", metin or "")
+    if not m:
+        return float("nan")
+    try:
+        return float(m.group(0).replace(".", ""))
+    except ValueError:
+        return float("nan")
+
+
 def parse_detail(html: str) -> dict:
-    """Şirket detay sayfasından halka arz yapısını ve sonuç tablosunu ayrıştırır."""
-    text = strip_tags(html)
+    """
+    Şirket detay sayfasından halka arz yapısını ve sonuç tablosunu ayrıştırır.
+
+    Sayfada iki farklı yapı var, ikisi de BeautifulSoup ile geziliyor:
+      1. Künye tablosu: <tr><td><em>Etiket :</em></td><td>Değer</td></tr>
+      2. "Özet Bilgiler" listesi: <ul class="aex-in"><li><h5>Başlık</h5><p>İçerik</p>
+      3. Sonuç tablosu: <tr>Yurt İçi Bireysel | kişi | lot | %oran</tr>
+    """
+    soup = BeautifulSoup(html, "html.parser")
     out = {}
 
-    fiyat_m = re.search(r"Halka Arz Fiyat[^:]*:\s*([\d.,]+)\s*TL", text)
-    out["halka_arz_fiyati"] = fiyat_m.group(1).replace(".", "").replace(",", ".") if fiyat_m else ""
+    # --- 1) Künye tablosu: <em> etiketli satırlar ---
+    kunye = {}
+    for tr in soup.select("tr"):
+        em = tr.find("em")
+        if not em:
+            continue
+        hucreler = tr.find_all("td")
+        if len(hucreler) >= 2:
+            etiket = em.get_text(strip=True).rstrip(":").strip()
+            kunye[etiket] = hucreler[1].get_text(" ", strip=True)
 
-    dag_m = re.search(r"Dağıtım Yöntemi\s*:\s*([A-Za-zÇĞİÖŞÜçğıöşü ]+?)\s*(?:\*|Pay\s*:)", text)
-    out["dagitim_yontemi"] = dag_m.group(1).strip() if dag_m else ""
+    fiyat = kunye.get("Halka Arz Fiyatı/Aralığı", "")
+    fm = re.search(r"([\d.,]+)\s*TL", fiyat)
+    out["halka_arz_fiyati"] = fm.group(1).replace(".", "").replace(",", ".") if fm else ""
 
-    pay_m = re.search(r"Pay\s*:\s*([\d.]+)\s*Lot", text)
-    out["toplam_lot"] = float(pay_m.group(1).replace(".", "")) if pay_m else float("nan")
+    # "Eşit Dağıtım **" -> yıldızları ve fazla boşluğu at
+    out["dagitim_yontemi"] = kunye.get("Dağıtım Yöntemi", "").replace("*", "").strip()
+    out["toplam_lot"] = _sayi(kunye.get("Pay", ""))
+    out["ilk_islem_tarihi"] = kunye.get("Bist İlk İşlem Tarihi", "").strip()
 
-    sa_m = re.search(r"Sermaye Artırımı\s*:\s*([\d.]+)\s*Lot", text)
-    os_m = re.search(r"Ortak Satışı\s*:\s*([\d.]+)\s*Lot", text)
-    sa = float(sa_m.group(1).replace(".", "")) if sa_m else float("nan")
-    os_ = float(os_m.group(1).replace(".", "")) if os_m else 0.0
+    # --- 2) Özet Bilgiler: "Halka Arz Şekli" ve "Fonun Kullanım Yeri" ---
+    ozet = {}
+    for li in soup.select("ul.aex-in li"):
+        h5, p = li.find("h5"), li.find("p")
+        if h5 and p:
+            ozet[h5.get_text(strip=True)] = p.get_text(" ", strip=True)
+
+    sekil = ozet.get("Halka Arz Şekli", "")
+    sa_m = re.search(r"Sermaye Artırımı\s*:\s*([\d.]+)\s*Lot", sekil)
+    os_m = re.search(r"Ortak Satışı\s*:\s*([\d.]+)\s*Lot", sekil)
+    sa = _sayi(sa_m.group(1)) if sa_m else float("nan")
+    os_ = _sayi(os_m.group(1)) if os_m else 0.0
     out["sermaye_artisi_lot"] = sa
     out["ortak_satisi_lot"] = os_
     toplam = (sa if sa == sa else 0) + (os_ if os_ == os_ else 0)
@@ -123,21 +146,23 @@ def parse_detail(html: str) -> dict:
         out["sermaye_artisi_yuzde"] = float("nan")
         out["ortak_satisi_yuzde"] = float("nan")
 
-    ilk_m = re.search(r"Bist İlk İşlem Tarihi\s*:\s*([^S]+?)\s*Son Güncelleme", text)
-    out["ilk_islem_tarihi"] = ilk_m.group(1).strip() if ilk_m else ""
+    # Fon kullanım yeri metni (ham). Yüzdelere ayrıştırma ileride yapılacak -
+    # bkz. context.md "Test Edilmiş Hipotezler" ve açık işler #4.
+    out["fon_kullanim_yeri"] = ozet.get("Fonun Kullanım Yeri", "")
 
-    # Sonuç tablosu: "Yurt İçi Bireysel 652.248 35.000.000 %40"
-    bir_m = re.search(r"Yurt İçi Bireysel\s+([\d.]+)\s+([\d.]+)\s+%", text)
-    if bir_m:
-        kisi = float(bir_m.group(1).replace(".", ""))
-        lot = float(bir_m.group(2).replace(".", ""))
-        out["bireysel_kisi"] = kisi
-        out["bireysel_lot"] = lot
-        out["bireysel_lot_basina_kisi"] = round(lot / kisi, 2) if kisi else float("nan")
-    else:
-        out["bireysel_kisi"] = float("nan")
-        out["bireysel_lot"] = float("nan")
-        out["bireysel_lot_basina_kisi"] = float("nan")
+    # --- 3) Sonuç tablosu: "Yurt İçi Bireysel | 652.248 | 35.000.000 | %40" ---
+    out["bireysel_kisi"] = float("nan")
+    out["bireysel_lot"] = float("nan")
+    out["bireysel_lot_basina_kisi"] = float("nan")
+    for tr in soup.select("tr"):
+        hucreler = [td.get_text(" ", strip=True) for td in tr.find_all(["td", "th"])]
+        if len(hucreler) >= 3 and hucreler[0].strip() == "Yurt İçi Bireysel":
+            kisi, lot = _sayi(hucreler[1]), _sayi(hucreler[2])
+            out["bireysel_kisi"] = kisi
+            out["bireysel_lot"] = lot
+            if kisi == kisi and lot == lot and kisi:
+                out["bireysel_lot_basina_kisi"] = round(lot / kisi, 2)
+            break
 
     return out
 
@@ -196,7 +221,7 @@ ALANLAR = [
     "sermaye_artisi_lot", "ortak_satisi_lot",
     "sermaye_artisi_yuzde", "ortak_satisi_yuzde",
     "bireysel_kisi", "bireysel_lot", "bireysel_lot_basina_kisi",
-    "ilk_islem_tarihi",
+    "ilk_islem_tarihi", "fon_kullanim_yeri",
 ]
 
 
